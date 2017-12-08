@@ -12,9 +12,11 @@ import torchvision.transforms as transforms
 
 import os
 import argparse
+import json
 
 from models import *
 from torch.autograd import Variable
+import InclusiveLoss
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
@@ -39,13 +41,11 @@ transform_test = transforms.Compose([
     transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
 ])
 
-trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+trainset = torchvision.datasets.CIFAR100(root='./data', train=True, download=True, transform=transform_train)
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=128, shuffle=True, num_workers=8)
 
-testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+testset = torchvision.datasets.CIFAR100(root='./data', train=False, download=True, transform=transform_test)
 testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=8)
-
-classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
 # Model
 if args.resume:
@@ -59,23 +59,27 @@ if args.resume:
 else:
     print('==> Building model..')
     # net = VGG('VGG19')
-    net = ResNet18()
+    # net = ResNet18()
     # net = PreActResNet18()
     # net = GoogLeNet()
     # net = DenseNet121()
-    # net = ResNeXt29_2x64d()
+    net = ResNeXt29_2x64d()
     # net = MobileNet()
     # net = DPN92()
     # net = ShuffleNetG2()
     # net = SENet18()
+    # net = LeNet()
+    # net = ResNet152()
 
 if use_cuda:
     net.cuda()
     net = torch.nn.DataParallel(net, device_ids=range(torch.cuda.device_count()))
     cudnn.benchmark = True
-
-criterion = nn.CrossEntropyLoss()
+with open('target_list.json', 'r') as f:
+    target_list = json.load(f)
+criterion = InclusiveLoss.InclusiveLoss(target_list)
 optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [150, 225])
 
 
 # Training
@@ -140,6 +144,8 @@ def test(epoch):
         best_acc = acc
 
 
-for epoch in range(start_epoch, start_epoch + 200):
+for epoch in range(start_epoch, start_epoch + 300):
+    scheduler.step()
+    print(optimizer.param_groups[0]['lr'])
     train(epoch)
     test(epoch)

@@ -11,8 +11,6 @@ import math
 import torch.nn as nn
 import torch.nn.init as init
 
-from textblob import Word
-
 
 def get_mean_and_std(dataset):
     '''Compute the mean and std value of dataset.'''
@@ -128,16 +126,3 @@ def format_time(seconds):
     if f == '':
         f = '0ms'
     return f
-
-
-def calculate_wordnet_distance(target_list):
-    synsets_list = []
-    distance_matrix = []
-    for label in target_list:
-        synsets_list.append(Word(label.lower()).synsets)
-    for label_name in synsets_list:
-        label_distance = []
-        for label_name2 in synsets_list:
-            label_distance.append(label_name.wup_similarity(label_name2))
-        distance_matrix.append(label_distance)
-    return distance_matrix
