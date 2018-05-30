@@ -10,3 +10,5 @@ from .mobilenet import *
 from .shufflenet import *
 from .preact_resnet import *
 from .alexnet import *
+from .ResNeXt import *
+from .wide_resnet import *

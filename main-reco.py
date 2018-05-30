@@ -87,8 +87,8 @@ with open('data/cifar-100-python/meta', 'r') as f:
 target_list = target_list['fine_label_names']
 # target_list = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
 criterion = InclusiveLoss.InclusiveLoss(target_list).cuda()
-# distance_matrix = criterion.distance_matrix
-# reco_acc = InclusiveLoss.RankingCorrelation(distance_matrix)
+distance_matrix = criterion.distance_matrix
+reco_acc = InclusiveLoss.RankingCorrelation(distance_matrix)
 # criterion = nn.CrossEntropyLoss().cuda()
 optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
 # for group in optimizer.param_groups:
@@ -123,16 +123,16 @@ def train(epoch, c_c):
         _, predicted = torch.max(outputs.data, 1)
         total += targets.size(0)
         correct += predicted.eq(targets.data).cpu().sum()
-    #     reco_acc.update(outputs, targets)
-    #     print(reco_acc.output())
-    # r_a = reco_acc.output()
-    # reco_acc.re_init()
+        reco_acc.update(outputs, targets)
+        print(reco_acc.output())
+    r_a = reco_acc.output()
+    reco_acc.re_init()
     # if epoch > 29:
     #     c_c.update()
     print(epoch, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
           % (train_loss, 100. * correct / total, correct, total))
-    return 100. * correct / total, c_c
-    # return r_a, c_c
+    # return 100. * correct / total, c_c
+    return r_a, c_c
 
 
 def test(epoch, c_c):
@@ -155,10 +155,10 @@ def test(epoch, c_c):
         _, predicted = torch.max(outputs.data, 1)
         total += targets.size(0)
         correct += predicted.eq(targets.data).cpu().sum()
-        # reco_acc.update(outputs, targets)
-    #     print(reco_acc.output())
-    # r_a = reco_acc.output()
-    # reco_acc.re_init()
+        reco_acc.update(outputs, targets)
+        print(reco_acc.output())
+    r_a = reco_acc.output()
+    reco_acc.re_init()
 
     print(epoch, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
           % (test_loss, 100. * correct / total, correct, total))
@@ -176,8 +176,8 @@ def test(epoch, c_c):
             os.mkdir('checkpoint')
         torch.save(state, './checkpoint/ckpt2.t7')
         best_acc = acc
-    return acc
-    # return r_a
+    # return acc
+    return r_a
 
 vis = visdom.Visdom()
 win = vis.line(X=np.array([0]), Y=np.array([[0, 0]]),
