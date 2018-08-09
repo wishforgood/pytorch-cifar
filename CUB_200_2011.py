@@ -15,10 +15,10 @@ import json
 
 from models import *
 from torch.autograd import Variable
-import InclusiveLoss
+import SC_Loss
 import RankingLoss
 import visdom
-from utils2 import FineTuneModel_Dense
+from utils2 import FineTuneModel
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.01, type=float, help='learning rate')
@@ -46,18 +46,21 @@ transform_test = transforms.Compose([
 # trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
 trainset = torchvision.datasets.ImageFolder(root='/root/mounted_device/tong/dataset/CUB_200_2011/train',
                                             transform=transform_train)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=48, shuffle=True, num_workers=16)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=96, shuffle=True, num_workers=16)
 
 # testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
 testset = torchvision.datasets.ImageFolder(root='/root/mounted_device/tong/dataset/CUB_200_2011/val',
                                            transform=transform_train)
-testloader = torch.utils.data.DataLoader(testset, batch_size=48, shuffle=False, num_workers=16)
+testloader = torch.utils.data.DataLoader(testset, batch_size=96, shuffle=False, num_workers=16)
 
 # Model
 print('==> Building model..')
-net = torchvision.models.densenet121(pretrained=True)
-net_features = nn.Sequential(*list(net.children())[:-1])
-net_classifier = nn.Sequential(nn.Linear(1024, 200))
+net = torchvision.models.resnet50(pretrained=True)
+# net_features = nn.Sequential(*list(net.children())[:-1])
+# for p in net_features.parameters():
+#     p.requires_grad = False
+# net_classifier = nn.Sequential(nn.Linear(2048, 200))
+net = FineTuneModel(net, 200)
 optimizer = optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=args.lr, momentum=0.9, weight_decay=1e-4)
 # net = VGG('VGG19')
 # net = torch.load('resnet18-5c106cde.pth')
@@ -77,8 +80,8 @@ optimizer = optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=ar
 if use_cuda:
     net.cuda()
     net = torch.nn.DataParallel(net, device_ids=range(torch.cuda.device_count()))
-    net_features = torch.nn.DataParallel(net_features, device_ids=range(torch.cuda.device_count()))
-    net_classifier = torch.nn.DataParallel(net_classifier, device_ids=range(torch.cuda.device_count()))
+    # net_features = torch.nn.DataParallel(net_features, device_ids=range(torch.cuda.device_count()))
+    # net_classifier = torch.nn.DataParallel(net_classifier, device_ids=range(torch.cuda.device_count()))
     cudnn.benchmark = True
 
 
@@ -95,7 +98,7 @@ if args.resume:
 with open('target_list.json', 'r') as f:
     target_list = json.load(f)
 # target_list = {'airplane', 'automobile', 'bird', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck'}
-criterion = InclusiveLoss.InclusiveLoss(target_list).cuda()
+criterion = SC_Loss.SC_Loss(target_list).cuda()
 # distance_matrix = criterion.distance_matrix
 # reco_acc = InclusiveLoss.RankingCorrelation(distance_matrix)
 # criterion = nn.CrossEntropyLoss().cuda()
@@ -103,7 +106,7 @@ scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
 
 
 # Training
-def train(epoch, c_c):
+def train(epoch):
     print('\nEpoch: %d' % epoch)
     net.train()
     train_loss = 0
@@ -114,12 +117,15 @@ def train(epoch, c_c):
             inputs, targets = inputs.cuda(), targets.cuda()
         optimizer.zero_grad()
         inputs, targets = Variable(inputs), Variable(targets)
-        features = net_features(inputs)
-        features = F.relu(features, inplace=True)
-        features = F.avg_pool2d(features, kernel_size=7).view(features.size(0), -1)
-        c_c.record(features, targets)
-        outputs = net_classifier(features)
-        loss = criterion(outputs, targets, c_c)
+        # features = net_features(inputs)
+        # features = features.view(features.size(0), -1)
+        # # c_c.record(features, targets)
+        # outputs = net_classifier(features)
+        outputs = net(inputs)
+        # loss = criterion(outputs, targets, c_c)
+        if epoch == 5:
+            print('!')
+        loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
 
@@ -131,14 +137,14 @@ def train(epoch, c_c):
     #     print(reco_acc.output())
     # r_a = reco_acc.output()
     # reco_acc.re_init()
-    c_c.update()
+    # c_c.update()
     print(epoch, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
           % (train_loss, 100. * correct / total, correct, total))
     return 100. * correct / total
     # return r_a
 
 
-def test(epoch, c_c):
+def test(epoch):
     global best_acc
     net.eval()
     test_loss = 0
@@ -148,12 +154,12 @@ def test(epoch, c_c):
         if use_cuda:
             inputs, targets = inputs.cuda(), targets.cuda()
         inputs, targets = Variable(inputs, volatile=True), Variable(targets)
-        features = net_features(inputs)
-        features = F.relu(features, inplace=True)
-        features = F.avg_pool2d(features, kernel_size=7).view(features.size(0), -1)
-        outputs = net_classifier(features)
-        loss = criterion(outputs, targets, c_c)
-
+        # features = net_features(inputs)
+        # features = features.view(features.size(0), -1)
+        # outputs = net_classifier(features)
+        # loss = criterion(outputs, targets, c_c)
+        outputs = net(inputs)
+        loss = criterion(outputs, targets)
         test_loss += loss.data[0]
         _, predicted = torch.max(outputs.data, 1)
         total += targets.size(0)
@@ -187,11 +193,12 @@ def test(epoch, c_c):
 vis = visdom.Visdom()
 win = vis.line(X=np.array([0]), Y=np.array([[0, 0]]),
                opts={'legend': ['train', 'test'], 'xlabel': 'epoch', 'ylabel': 'acc'})
-c_c = InclusiveLoss.ClusterCenters(200, 1024)
+# c_c = InclusiveLoss.ClusterCenters(200, 2048)
+
 for epoch in range(start_epoch, start_epoch + 300):
     scheduler.step()
     print(optimizer.param_groups[0]['lr'])
-    train_r_a = train(epoch, c_c)
-    test_r_a = test(epoch, c_c)
+    train_r_a = train(epoch)
+    test_r_a = test(epoch)
     vis.line(X=np.array([epoch]), Y=np.array([[train_r_a, test_r_a]]),
              opts={'legend': ['train', 'test'], 'xlabel': 'epoch', 'ylabel': 'acc'}, update='append', win=win)

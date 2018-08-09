@@ -35,10 +35,10 @@ def calculate_wordnet_distance(target_list):
                 break
             if label._lexname == 'noun.animal':
                 label_name = label
-            # sim = label.wup_similarity(Word('animal').synsets[0])
-            # if sim > s_w_a:
-            #     label_name = label
-            #     s_w_a = sim
+                # sim = label.wup_similarity(Word('animal').synsets[0])
+                # if sim > s_w_a:
+                #     label_name = label
+                #     s_w_a = sim
         synsets_list.append(label_name)
     for label_name in synsets_list:
         label_distance = []
@@ -47,28 +47,49 @@ def calculate_wordnet_distance(target_list):
             #     label_name2,
             #     simulate_root=True, use_min_depth=True
             # )[0].max_depth()))
-            # label_distance.append((label_name.wup_similarity(label_name2)))
-            if label_name.path_similarity(label_name2) != 1:
-                label_distance.append(
-                    (label_name.wup_similarity(label_name2) + label_name.path_similarity(label_name2)))
-            else:
-                label_distance.append((label_name.wup_similarity(label_name2)))
+            wup = label_name.wup_similarity(label_name2)
+            if label_name == label_name2:
+                wup += 1
+            label_distance.append(wup)
+            # if label_name.path_similarity(label_name2) != 1:
+            #     label_distance.append(
+            #         (label_name.wup_similarity(label_name2) + 3 * label_name.path_similarity(label_name2)) / 4)
+            # else:
+            #     label_distance.append((label_name.wup_similarity(label_name2)))
         distance_matrix.append(label_distance)
+    distance_rank = []
+    for i in range(len(distance_matrix)):
+        distance_rank.append(sorted(range(len(distance_matrix[i])), key=lambda k: distance_matrix[i][k], reverse=True))
+    for i in range(len(distance_matrix)):
+        distance_matrix[i] = filter_out(distance_matrix[i], distance_rank[i])
+    # return distance_matrix, distance_rank
     return distance_matrix
 
+
+def filter_out(distance_vector, distance_rank_vector):
+    for i in range(10, 100):
+        distance_vector[distance_rank_vector[i]] = 0
+    return distance_vector
+
+
+# def generating_ijk(distance_rank):
+#     for class_index, class_rank in enumerate(distance_rank):
+#         i = class_index
+#         for second_class_index
 
 class FineTuneModel(nn.Module):
     def __init__(self, original_model, num_classes):
         super(FineTuneModel, self).__init__()
-        self.features = nn.Sequential(*list(original_model.modules())[:-1])
+        self.features = nn.Sequential(*list(original_model.children())[:-1])
         self.classifier = nn.Sequential(nn.Linear(2048, num_classes))
 
-        for p in self.features.parameters():
-            p.requires_grad = False
+        # for p in self.features.parameters():
+        #     p.requires_grad = False
 
     def forward(self, x):
         f = self.features(x)
         f = f.view(f.size(0), -1)
+        # f = F.avg_pool2d(f, kernel_size=8).view(f.size(0), -1)
         y = self.classifier(f)
         return y
 

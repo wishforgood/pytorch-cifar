@@ -1,3 +1,4 @@
+from __future__ import print_function
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,26 +9,45 @@ import numpy as np
 
 
 class InclusiveLoss(nn.Module):
-    def __init__(self, target_list):
-        self.distance_matrix = Variable(torch.FloatTensor(utils2.calculate_wordnet_distance(target_list)))
+    def __init__(self, target_list, resume_distance):
         super(InclusiveLoss, self).__init__()
+        if resume_distance is not None:
+            self.distance_matrix_initial = resume_distance.clone()
+            self.distance_matrix = nn.Parameter(resume_distance.clone().cpu().data)
+        else:
+            self.distance_matrix_initial = Variable(
+                torch.FloatTensor(utils2.calculate_wordnet_distance(target_list))).cuda()
+            self.distance_matrix = nn.Parameter(
+                torch.FloatTensor(utils2.calculate_wordnet_distance(target_list)))
+        # self.distance_matrix.register_hook(print)
+        self.parameter_list = nn.ParameterList()
+        self.parameter_list.append(self.distance_matrix)
         np.save('cub_distance', self.distance_matrix.data.numpy())
 
-    def forward(self, input, target, c_c):
-        ap_distance_matrix = c_c.distance_matrix()
+    def forward(self, input, target):
+        # ap_distance_matrix = c_c.distance_matrix()
+        # print(self.distance_matrix)
+        # input.register_hook(print)
         semantic_distance_vector = self.distance_matrix.narrow(0, target[0].data[0], 1)
-        ap_distance_vector = ap_distance_matrix.narrow(0, target[0].data[0], 1)
+        # ap_distance_vector = ap_distance_matrix.narrow(0, target[0].data[0], 1)
         for i in range(1, len(input)):
             semantic_distance_vector = torch.cat(
                 [semantic_distance_vector, self.distance_matrix.narrow(0, target[i].data[0], 1)])
-            ap_distance_vector = torch.cat(
-                [ap_distance_vector, ap_distance_matrix.narrow(0, target[i].data[0], 1)])
-        inclusive_regulirizer = -0.4 * torch.sum(semantic_distance_vector.cuda() * F.log_softmax(input, 0)) / (len(
-            self.distance_matrix) * len(input))
-        ap_regulirizer = -0.4 * torch.sum(ap_distance_vector.cuda() * F.log_softmax(input, 0)) / (len(
-            self.distance_matrix) * len(input))
-        return F.cross_entropy(input, target) + 0.6 * (inclusive_regulirizer + ap_regulirizer)
-        # return F.cross_entropy(input, target) + inclusive_regulirizer
+            #  ap_distance_vector = torch.cat(
+            #     [ap_distance_vector, ap_distance_matrix.narrow(0, target[i].data[0], 1)])
+        # inclusive_regulirizer = - torch.sum(semantic_distance_vector.cuda() * F.log_softmax(input, 1)) / (len(
+        #     self.distance_matrix) * len(input))
+        inclusive_regulirizer = - torch.sum(semantic_distance_vector.cuda() * F.log_softmax(input, 1)) / (
+        len(input)) / 10
+        # ap_regulirizer = -0.2 * torch.sum(ap_distance_vector.cuda() * F.log_softmax(input, 0)) / (len(
+        #     self.distance_matrix) * len(input))
+        # return F.cross_entropy(input, target) + 0.6 * (inclusive_regulirizer + ap_regulirizer)
+        # print(inclusive_regulirizer)
+        # print(math.pow(torch.dist(self.distance_matrix, self.distance_matrix_initial, 2), 2))
+        return inclusive_regulirizer + 0.5 * torch.pow(
+            torch.dist(self.distance_matrix,
+                       self.distance_matrix_initial,
+                       2), 2)
         # return F.cross_entropy(input, target) + 0.1 * inclusive_regulirizer
         # return F.cross_entropy(input, target)
 

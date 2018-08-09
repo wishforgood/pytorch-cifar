@@ -27,6 +27,7 @@ args = parser.parse_args()
 
 use_cuda = torch.cuda.is_available()
 best_acc = 0  # best test accuracy
+top2_best = 0
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
 # Data
@@ -86,61 +87,53 @@ with open('data/cifar-100-python/meta', 'r') as f:
     target_list = pickle.load(f)
 target_list = target_list['fine_label_names']
 # target_list = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
-criterion = InclusiveLoss.InclusiveLoss(target_list).cuda()
+# criterion = InclusiveLoss.InclusiveLoss(target_list, None).cuda()
 # distance_matrix = criterion.distance_matrix
-# reco_acc = InclusiveLoss.RankingCorrelation(distance_matrix)
-# criterion = nn.CrossEntropyLoss().cuda()
+# reco_acc = InclusiveLoss.InclusiveLoss(distance_matrix)
+criterion = nn.CrossEntropyLoss().cuda()
 optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+# optimizer.add_param_group({'params': criterion.parameters()})
 # for group in optimizer.param_groups:
 #     group.setdefault('initial_lr', args.lr)
-scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [50, 150], gamma=0.1, last_epoch=-1)
+scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [50, 120], gamma=0.2, last_epoch=-1)
 
 
 # Training
-def train(epoch, c_c):
+def train(epoch):
     print('\nEpoch: %d' % epoch)
     net.train()
     train_loss = 0
-    correct = 0
-    total = 0
+    top1 = AverageMeter()
+    top2 = AverageMeter()
     for batch_idx, (inputs, targets) in enumerate(trainloader):
         if use_cuda:
             inputs, targets = inputs.cuda(), targets.cuda()
         optimizer.zero_grad()
         inputs, targets = Variable(inputs), Variable(targets)
-        # outputs = net(inputs)
         features = net_features(inputs)
         features = F.avg_pool2d(features, 4)
         features = features.view(features.size(0), -1)
-        # if epoch > 30:
-        #     c_c.record(features, targets)
         outputs = net_classifier(features)
-        loss = criterion(outputs, targets, c_c)
+        loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
 
         train_loss += loss.data[0]
-        _, predicted = torch.max(outputs.data, 1)
-        total += targets.size(0)
-        correct += predicted.eq(targets.data).cpu().sum()
-    #     reco_acc.update(outputs, targets)
-    #     print(reco_acc.output())
-    # r_a = reco_acc.output()
-    # reco_acc.re_init()
-    # if epoch > 29:
-    #     c_c.update()
-    print(epoch, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-          % (train_loss, 100. * correct / total, correct, total))
-    return 100. * correct / total, c_c
-    # return r_a, c_c
+        prec1, prec2 = accuracy(outputs, targets, topk=(1, 5))
+        top1.update(prec1[0], inputs.size(0))
+        top2.update(prec2[0], inputs.size(0))
+    print(epoch, len(trainloader), 'Loss: %.3f | Top1: %.3f | Top2: %.3f'
+          % (train_loss, top1.avg, top2.avg))
+    return top1.avg.data[0]
 
 
-def test(epoch, c_c):
+def test(epoch):
     global best_acc
+    global top2_best
     net.eval()
     test_loss = 0
-    correct = 0
-    total = 0
+    top1 = AverageMeter()
+    top2 = AverageMeter()
     for batch_idx, (inputs, targets) in enumerate(testloader):
         if use_cuda:
             inputs, targets = inputs.cuda(), targets.cuda()
@@ -149,47 +142,73 @@ def test(epoch, c_c):
         features = F.avg_pool2d(features, 4)
         features = features.view(features.size(0), -1)
         outputs = net_classifier(features)
-        loss = criterion(outputs, targets, c_c)
+        loss = criterion(outputs, targets)
 
         test_loss += loss.data[0]
-        _, predicted = torch.max(outputs.data, 1)
-        total += targets.size(0)
-        correct += predicted.eq(targets.data).cpu().sum()
-        # reco_acc.update(outputs, targets)
-    #     print(reco_acc.output())
-    # r_a = reco_acc.output()
-    # reco_acc.re_init()
+        prec1, prec2 = accuracy(outputs, targets, topk=(1, 5))
+        top1.update(prec1[0], inputs.size(0))
+        top2.update(prec2[0], inputs.size(0))
 
-    print(epoch, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-          % (test_loss, 100. * correct / total, correct, total))
-    print('Best acc: %f', best_acc)
-
-    # Save checkpoint.
-    acc = 100. * correct / total
-    if acc > best_acc:
+    print(epoch, len(testloader), 'Loss: %.3f | Top1: %.3f | Top2: %.3f'
+          % (test_loss, top1.avg, top2.avg))
+    if top1.avg.data[0] > best_acc:
         print('Saving..')
         state = {
             'net': net.module if use_cuda else net,
-            'acc': acc,
+            'acc': top1.avg.data[0],
             'epoch': epoch,
         }
         if not os.path.isdir('checkpoint'):
             os.mkdir('checkpoint')
         torch.save(state, './checkpoint/ckpt2.t7')
-        best_acc = acc
-    return acc
-    # return r_a
+        best_acc = top1.avg.data[0]
+    if top2.avg.data[0] > top2_best:
+        top2_best = top2.avg.data[0]
+    print('Best acc: %f', best_acc)
+    print('Best top2: %f', top2_best)
+    return top1.avg.data[0]
+
+
+class AverageMeter(object):
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
+def accuracy(output, target, topk=(1,)):
+    maxk = max(topk)
+    batch_size = target.size(0)
+    _, pred = output.topk(maxk, 1, True, True)
+    pred = pred.t()
+    correct = pred.eq(target.view(1, -1).expand_as(pred))
+    res = []
+    for k in topk:
+        correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+        res.append(correct_k.mul_(100.0 / batch_size))
+    return res
+
 
 vis = visdom.Visdom()
 win = vis.line(X=np.array([0]), Y=np.array([[0, 0]]),
                opts={'legend': ['train', 'test'], 'xlabel': 'epoch', 'ylabel': 'acc'})
-c_c = InclusiveLoss.ClusterCenters(100, 512)
+# c_c = InclusiveLoss.ClusterCenters(10, 512)
 
 for epoch in range(start_epoch + 1, start_epoch + 300):
     scheduler.step()
     print(optimizer.param_groups[0]['lr'])
     # class_centers = torch.rand(512)
-    train_r_a, c_c = train(epoch, c_c)
-    test_r_a = test(epoch, c_c)
+    train_r_a = train(epoch)
+    test_r_a = test(epoch)
     vis.line(X=np.array([epoch]), Y=np.array([[train_r_a, test_r_a]]),
              opts={'legend': ['train', 'test'], 'xlabel': 'epoch', 'ylabel': 'acc'}, update='append', win=win)
